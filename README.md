@@ -1,1 +1,1 @@
-# Depp-Learning-Course
+# Deep-Learning-Course
