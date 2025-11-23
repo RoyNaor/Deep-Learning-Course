@@ -1,0 +1,66 @@
+# YOLO Utility Functions (with short comments)
+import tensorflow as tf
+
+def yolo_filter_boxes(boxes, box_confidence, box_class_probs, threshold=0.6):
+    # Compute scores: p_c * class_probs
+    box_scores = box_confidence * box_class_probs
+    # Get best class score per box
+    box_class_scores = tf.reduce_max(box_scores, axis=-1)
+    box_classes = tf.argmax(box_scores, axis=-1)
+    # Filter by threshold
+    filtering_mask = box_class_scores >= threshold
+    # Apply mask
+    scores  = tf.boolean_mask(box_class_scores, filtering_mask)
+    boxes   = tf.boolean_mask(boxes, filtering_mask)
+    classes = tf.boolean_mask(box_classes, filtering_mask)
+    return scores, boxes, classes
+
+def iou(box1, box2):
+    # Intersection
+    (x1,y1,x2,y2) = box1
+    (X1,Y1,X2,Y2) = box2
+    xi1, yi1 = max(x1,X1), max(y1,Y1)
+    xi2, yi2 = min(x2,X2), min(y2,Y2)
+    inter_w, inter_h = max(xi2-xi1,0), max(yi2-yi1,0)
+    inter_area = inter_w * inter_h
+    # Union
+    area1 = (x2-x1)*(y2-y1)
+    area2 = (X2-X1)*(Y2-Y1)
+    union = area1 + area2 - inter_area
+    return inter_area / union
+
+def yolo_non_max_suppression(scores, boxes, classes, max_boxes=10, iou_threshold=0.5):
+    # NMS per class
+    boxes = tf.cast(boxes, tf.float32)
+    scores = tf.cast(scores, tf.float32)
+    nms_indices = []
+    labels = tf.unique(classes)[0]
+    for label in labels:
+        mask = classes == label
+        boxes_l = tf.boolean_mask(boxes, mask)
+        scores_l = tf.boolean_mask(scores, mask)
+        if tf.shape(scores_l)[0] > 0:
+            sel = tf.image.non_max_suppression(
+                boxes_l, scores_l, max_boxes, iou_threshold=iou_threshold)
+            orig_idx = tf.squeeze(tf.where(mask), axis=1)
+            nms_indices.append(tf.gather(orig_idx, sel))
+    nms_indices = tf.concat(nms_indices, axis=0)
+    scores  = tf.gather(scores, nms_indices)
+    boxes   = tf.gather(boxes,  nms_indices)
+    classes = tf.gather(classes, nms_indices)
+    # Sort and keep max_boxes
+    order = tf.argsort(scores, direction='DESCENDING')
+    order = order[:max_boxes]
+    return tf.gather(scores, order), tf.gather(boxes, order), tf.gather(classes, order)
+
+def yolo_eval(yolo_outputs, image_shape=(720,1280), max_boxes=10, score_threshold=0.6, iou_threshold=0.5):
+    # Unpack outputs
+    box_xy, box_wh, box_conf, box_class_probs = yolo_outputs
+    # Convert to corners
+    boxes = yolo_boxes_to_corners(box_xy, box_wh)
+    # Score filtering
+    scores, boxes, classes = yolo_filter_boxes(boxes, box_conf, box_class_probs, score_threshold)
+    # Rescale to image
+    boxes = scale_boxes(boxes, image_shape)
+    # NMS
+    return yolo_non_max_suppression(scores, boxes, classes, max_boxes, iou_threshold)
